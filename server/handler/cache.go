@@ -1,23 +1,22 @@
-package proxy
+package handler
 
 import (
 	"context"
 	"hash/fnv"
+	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
 	redisCache "github.com/go-redis/cache/v8"
 	"github.com/go-redis/redis/v8"
-	"github.com/gofiber/fiber/v2"
 )
 
 type Object struct {
-	StatusCode      int
-	ContentType     []byte
-	Body            []byte
-	ContentEncoding []byte
-	Host            string
-	Headers         map[string]string
+	URL        *url.URL
+	StatusCode int
+	Body       []byte
+	Headers    http.Header
 }
 
 const (
@@ -51,9 +50,8 @@ func NewAdapter(opt *redis.Options) *Adapter {
 	})}
 }
 
-func (a *Adapter) Set(key uint64, c *fiber.Ctx, level cacheLevel, expiration time.Duration) (err error) {
-	req := c.Request()
-	res := c.Response()
+func (a *Adapter) Set(key uint64, rc *RequestCall, level cacheLevel, expiration time.Duration) (err error) {
+
 	// var headers fasthttp.ResponseHeader
 
 	// if level == Disabled {
@@ -65,17 +63,20 @@ func (a *Adapter) Set(key uint64, c *fiber.Ctx, level cacheLevel, expiration tim
 	// } else {
 	// 	headers = nil
 	// }
-	tmpheaders := make(map[string]string)
-	res.Header.VisitAll(func(key []byte, value []byte) {
-		tmpheaders[string(key)] = string(value)
-	})
+	// tmpheaders := make(map[string]string)
+	// res.Header().VisitAll(func(key []byte, value []byte) {
+	// 	tmpheaders[string(key)] = string(value)
+	// })
+
+	if err != nil {
+		panic(err)
+	}
+
 	obj := &Object{
-		ContentType:     res.Header.ContentType(),
-		StatusCode:      res.StatusCode(),
-		ContentEncoding: c.Response().Header.Peek(fiber.HeaderContentEncoding),
-		Body:            res.Body(),
-		Host:            string(req.Header.Host()),
-		Headers:         tmpheaders,
+		StatusCode: rc.Response.StatusCode,
+		Body:       rc.Response.Content,
+		URL:        rc.Request.URL,
+		Headers:    rc.Response.Header(),
 	}
 	err = a.store.Set(&redisCache.Item{
 		Key:   KeyAsString(key),
