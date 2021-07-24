@@ -12,3 +12,7 @@ A simple reverse proxy in go.
 * Clustering, directing request to instance which is nearest to the origin
 * Better caching strategy
 * Support Websockets better
+
+### Note: for HTTP/3 support in some modern browsers, you need to have a certificate for a publicly resolveable domain 
+ex) example.com, not localhost
+
