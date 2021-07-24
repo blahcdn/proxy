@@ -19,9 +19,8 @@ func StartServer() {
 	flag.StringVar(&port, "p", ":5000", "an int")
 
 	store := handler.NewAdapter(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
+		Network: "unix",
+		Addr:    "/tmp/docker/redis.sock",
 	})
 	flag.Parse()
 	handler.AddHost("localhost:5000", false, "192.168.219.102:3001", 10*time.Minute)
