@@ -24,10 +24,7 @@ func StartServer() {
 		Addr:    "/tmp/docker/redis.sock",
 	})
 	flag.Parse()
-	handler.AddHost("localhost:5000", false, "192.168.219.102:3001", 10*time.Minute)
-	handler.AddHost("localhost:8000", false, "192.168.219.102:3001", 10*time.Minute)
-
-	//AddHost("localhost:4000", false, "192.168.219.102:3001", 5*time.Minute)
+	handler.AddHost("jcde.xyz:5000", false, "127.0.0.1:3001", 10*time.Minute)
 
 	// Start server
 	go http3.ListenAndServeQUIC(port, "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +33,7 @@ func StartServer() {
 	}))
 
 	log.Fatal(http.ListenAndServeTLS(port, "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("alt-svc", fmt.Sprintf(`h3-27="%[1]v"; ma=86400, h3-28="%[1]v"; ma=86400, h3-29="%[1]v"; ma=86400, h3=%[1]v"; ma=86400`, port))
+		w.Header().Set("alt-svc", fmt.Sprintf(`h3="%[1]v"; ma=2592000,h3-34="%[1]v"; ma=2592000,h3-32="%[1]v"; ma=2592000,h3-29="%[1]v"; ma=2592000`, port))
 		rc := handler.InitReqCall(w, r)
 		rc.ProxyHandler(store)
 	})))

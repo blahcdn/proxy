@@ -11,6 +11,8 @@ services:
       ports:
         - 5000:5000/udp 
         - 5000:5000
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
   redis:
       image: redis
       command: redis-server /etc/redis.conf
