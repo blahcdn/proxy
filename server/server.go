@@ -3,6 +3,7 @@ package server
 import (
 	"flag"
 	"fmt"
+	"log"
 	"time"
 
 	"net/http"
@@ -16,7 +17,7 @@ import (
 var port string
 
 func StartServer() {
-	flag.StringVar(&port, "p", ":5000", "an int")
+	flag.StringVar(&port, "p", ":5000", "port to bind to")
 
 	store := handler.NewAdapter(&redis.Options{
 		Network: "unix",
@@ -34,26 +35,10 @@ func StartServer() {
 		rc.ProxyHandler(store)
 	}))
 
-	http.ListenAndServeTLS(port, "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("alt-svc", fmt.Sprintf(`h3-27=":%[1]v"; ma=86400, h3-28=":%[1]v"; ma=86400, h3-29="%[1]v"; ma=86400, h3=%[1]v"; ma=86400`, port))
+	log.Fatal(http.ListenAndServeTLS(port, "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("alt-svc", fmt.Sprintf(`h3-27="%[1]v"; ma=86400, h3-28="%[1]v"; ma=86400, h3-29="%[1]v"; ma=86400, h3=%[1]v"; ma=86400`, port))
 		rc := handler.InitReqCall(w, r)
 		rc.ProxyHandler(store)
-	}))
-
-	//  http.ListenAndServeTLS(":4000", "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-	// 	rc := handler.InitReqCall(w, r)
-	// 	rc.ProxyHandler(store)
-	// }))
-	// http.ListenAndServe(":4000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	rc := handler.InitReqCall(w, r)
-	// 	rc.ProxyHandler(store)
-	// }))
-	// http.ListenAndServeTLS(":4000", "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	// 	rc := handler.InitReqCall(w, r)
-	// 	rc.ProxyHandler(store)
-	// }))
+	})))
 
 }
-
-// Handler~, "Hello, World!")

@@ -1,13 +1,13 @@
 services:
   tmp:
-      image: busybox
-      command: chmod -R 700 /tmp/docker
-      volumes:
-          - /tmp/docker/
+    image: busybox
+    command: chmod -R 777 /tmp/docker
+    volumes:
+        - redis
   proxy:
       build: .
-      volumes_from:
-          - tmp
+      volumes:
+          - redis:/tmp/docker 
       ports:
         - 5000:5000/udp 
         - 5000:5000
@@ -16,5 +16,7 @@ services:
       command: redis-server /etc/redis.conf
       volumes:
           - ./redis.conf:/etc/redis.conf
-      volumes_from:
-          - tmp
+          - redis:/tmp/docker 
+
+volumes:
+  redis:
