@@ -1,17 +1,22 @@
 package handler
 
-func (rc RequestCall) serveFromCache(e *Object) {
+import "github.com/blahcdn/proxy/server/cache"
 
+func (rc RequestCall) serveFromCache(e *cache.CacheObject) {
 	res := rc.Response
 
-	res.CopyHeaders(e.Headers)
-	contentEncoding := e.Headers.Get("Content-Encoding")
-	if len(contentEncoding) > 0 {
-		res.Header().Set("Content-Encoding", contentEncoding)
-	}
-	res.Header().Set("Content-Type", e.Headers.Get("Content-Type"))
-	res.Header().Set("asdf", "123")
-	res.Header().Set(cacheHeader, CacheHit)
+	res.CopyHeaders(e.ResponseHeaders)
+	res.Header().Set(cacheHeader, cache.HeaderCacheHit)
 	res.Write(e.Body)
 
+}
+func ConvertRequestCallToCacheObj(rc RequestCall) *cache.CacheObject {
+	return &cache.CacheObject{
+		ResponseHeaders: rc.Response.Header(),
+		RequestHeaders:  rc.Request.Header,
+		Body:            rc.Response.Content,
+		URL:             rc.Request.URL,
+		Method:          rc.Request.Method,
+		StatusCode:      rc.Response.StatusCode,
+	}
 }

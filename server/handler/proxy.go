@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/blahcdn/proxy/response"
+	"github.com/blahcdn/proxy/server/cache"
 	"github.com/labstack/echo/v4"
 	//...
 )
@@ -33,9 +33,8 @@ type RequestCall struct {
 }
 
 type Target struct {
-	URL       *url.URL
-	handler   *httputil.ReverseProxy
-	expiresOn time.Time
+	URL     *url.URL
+	handler *httputil.ReverseProxy
 }
 
 var hostProxy = struct {
@@ -43,7 +42,7 @@ var hostProxy = struct {
 	targets map[string]*Target
 }{targets: make(map[string]*Target)}
 
-func AddHost(host string, isWebsocket bool, target string, ttl time.Duration) (err error) {
+func AddHost(host string, isWebsocket bool, target string) (err error) {
 	var remoteUrl *url.URL
 	if isWebsocket {
 		remoteUrl, err = url.Parse("wss://" + target)
@@ -78,34 +77,28 @@ func AddHost(host string, isWebsocket bool, target string, ttl time.Duration) (e
 	}
 
 	proxy := &httputil.ReverseProxy{Director: director}
-	hostProxy.targets[host] = &Target{handler: proxy, expiresOn: time.Now().Add(ttl)}
+	hostProxy.targets[host] = &Target{handler: proxy, URL: remoteUrl}
 
 	return nil
 }
 
-func checkExpired(host string) (err error) {
-	if target, ok := hostProxy.targets[host]; ok {
-		hostProxy.Lock()
+// func checkExpired(host string) (err error) {
+// 	if target, ok := hostProxy.targets[host]; ok {
+// 		hostProxy.Lock()
 
-		defer hostProxy.Unlock()
+// 		defer hostProxy.Unlock()
 
-		// Amount of time passed after the handler expired >=0
-		if time.Since(target.expiresOn) >= 0 {
-			println("expired")
+// 	}
+// 	return nil
+// }
 
-		}
-
-	}
-	return nil
-}
-
-func (rc *RequestCall) ProxyHandler(store *Adapter) {
+func (rc *RequestCall) ProxyHandler(store *cache.RedisAdapter) {
 	r := rc.Request
 	w := rc.Response
 
 	host := r.Host
 
-	key := GenerateKey(rc.Request.URL.String())
+	key := cache.GenerateKey(rc.Request.URL.String())
 	if target, ok := hostProxy.targets[host]; ok {
 
 		// Fix header
@@ -127,7 +120,7 @@ func (rc *RequestCall) ProxyHandler(store *Adapter) {
 		default:
 			host := r.Host
 			if r.Method != "GET" {
-				w.Header().Set(cacheHeader, CacheMiss)
+				w.Header().Set(cacheHeader, cache.HeaderCacheMiss)
 			} else {
 
 				e, exists := store.Get(key)
@@ -141,8 +134,7 @@ func (rc *RequestCall) ProxyHandler(store *Adapter) {
 			fn, ok := hostProxy.targets[host]
 			if ok {
 				fn.handler.ServeHTTP(w, r)
-				go rc.Cache(store, key, cacheLevel(FULL), 5*time.Minute)
-				go checkExpired(host)
+				rc.CacheFull(store, key, cache.CacheLevel(cache.All), 5*time.Minute)
 				return
 			} else {
 				http.Error(w, "Direct access prohibited", http.StatusForbidden)
@@ -200,45 +192,6 @@ func proxyRaw(t *Target, inw http.ResponseWriter, inr *http.Request) http.Handle
 	})
 }
 
-func joinURLPath(a, b *url.URL) (path, rawpath string) {
-	if a.RawPath == "" && b.RawPath == "" {
-		return singleJoiningSlash(a.Path, b.Path), ""
-	}
-	// Same as singleJoiningSlash, but uses EscapedPath to determine
-	// whether a slash should be added
-	apath := a.EscapedPath()
-	bpath := b.EscapedPath()
-
-	aslash := strings.HasSuffix(apath, "/")
-	bslash := strings.HasPrefix(bpath, "/")
-
-	switch {
-	case aslash && bslash:
-		return a.Path + b.Path[1:], apath + bpath[1:]
-	case !aslash && !bslash:
-		return a.Path + "/" + b.Path, apath + "/" + bpath
-	}
-	return a.Path + b.Path, apath + bpath
-}
-
-func singleJoiningSlash(a, b string) string {
-	aslash := strings.HasSuffix(a, "/")
-	bslash := strings.HasPrefix(b, "/")
-	switch {
-	case aslash && bslash:
-		return a + b[1:]
-	case !aslash && !bslash:
-		return a + "/" + b
-	}
-	return a + b
-}
-
-func isWebsocket(r *http.Request) bool {
-	upgrade := r.Header.Get("Upgrade")
-	return strings.EqualFold(upgrade, "websocket")
-
-}
-
 func InitReqCall(res http.ResponseWriter, req *http.Request) RequestCall {
 	return RequestCall{
 		Response: response.NewResponseWriter(res),
@@ -246,6 +199,7 @@ func InitReqCall(res http.ResponseWriter, req *http.Request) RequestCall {
 	}
 }
 
-func (rc *RequestCall) Cache(store *Adapter, key uint64, level cacheLevel, ttl time.Duration) {
-	store.Set(key, rc, level, ttl)
+func (rc RequestCall) CacheFull(store *cache.RedisAdapter, key uint64, level cache.CacheLevel, ttl time.Duration) {
+	obj := ConvertRequestCallToCacheObj(rc)
+	obj.Cache(store, key, level, ttl)
 }

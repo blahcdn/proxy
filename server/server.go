@@ -2,16 +2,13 @@ package server
 
 import (
 	"flag"
-	"fmt"
 	"log"
-	"time"
 
 	"net/http"
 
+	"github.com/blahcdn/proxy/server/cache"
 	"github.com/blahcdn/proxy/server/handler"
 	"github.com/go-redis/redis/v8"
-
-	"github.com/lucas-clemente/quic-go/http3"
 )
 
 var port string
@@ -19,21 +16,19 @@ var port string
 func StartServer() {
 	flag.StringVar(&port, "p", ":5000", "port to bind to")
 
-	store := handler.NewAdapter(&redis.Options{
+	store := cache.NewRedisAdapter(&redis.Options{
 		Network: "unix",
-		Addr:    "/tmp/docker/redis.sock",
+		Addr:    "/var/run/redis/redis.sock",
 	})
-	flag.Parse()
-	handler.AddHost("jcde.xyz:5000", false, "127.0.0.1:3001", 10*time.Minute)
+	// store := handler.NewAdapter(&redis.Options{
+	// 	Addr: "127.0.0.1:6379",
+	// })
 
-	// Start server
-	go http3.ListenAndServeQUIC(port, "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rc := handler.InitReqCall(w, r)
-		rc.ProxyHandler(store)
-	}))
+	flag.Parse()
+	handler.AddHost("localhost:5000", false, "192.168.219.102:3001")
 
 	log.Fatal(http.ListenAndServeTLS(port, "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("alt-svc", fmt.Sprintf(`h3="%[1]v"; ma=2592000,h3-34="%[1]v"; ma=2592000,h3-32="%[1]v"; ma=2592000,h3-29="%[1]v"; ma=2592000`, port))
+
 		rc := handler.InitReqCall(w, r)
 		rc.ProxyHandler(store)
 	})))
