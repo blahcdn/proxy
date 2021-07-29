@@ -10,34 +10,33 @@ import (
 type ResponseWriter struct {
 	http.ResponseWriter
 	http.Hijacker
-	StatusCode int
 	Content    []byte
+	StatusCode int
+	Compressed bool
 }
 
 func NewResponseWriter(w http.ResponseWriter) *ResponseWriter {
-	lwr := &ResponseWriter{ResponseWriter: w}
-	lwr.Reset()
-	return lwr
+	wr := &ResponseWriter{ResponseWriter: w}
+	wr.Reset()
+	return wr
+}
+
+// WriteHeader - ResponseWriter's WriteHeader method decorator.
+func (wr *ResponseWriter) WriteHeader(statusCode int) {
+	wr.StatusCode = statusCode
+	//wr.ResponseWriter.WriteHeader(statusCode)
 }
 
 // Reset - Reset the stored content of ResponseWriter.
 func (wr *ResponseWriter) Reset() {
-	wr.StatusCode = 0
 	wr.Content = make([]byte, 0)
+	wr.StatusCode = 0
 }
 
 // Write - ResponseWriter's Write method decorator.
-func (wr *ResponseWriter) Write(p []byte) (int, error) {
-	wr.Content = append(wr.Content, p...)
-
-	return wr.ResponseWriter.Write(p)
-}
-
-func (wr *ResponseWriter) WriteBody(page string) bool {
-	pageByte := []byte(page)
-	sent, err := wr.ResponseWriter.Write(pageByte)
-
-	return sent > 0 && err == nil
+func (wr *ResponseWriter) Write(b []byte) (int, error) {
+	wr.Content = append(wr.Content, b...)
+	return wr.ResponseWriter.Write(b)
 }
 
 func (wr *ResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {

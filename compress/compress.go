@@ -2,87 +2,101 @@ package compress
 
 import (
 	"compress/gzip"
+	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/blahcdn/proxy/headers"
+	"github.com/blahcdn/proxy/response"
 )
 
 const (
-	brEncoding      = "br"
-	gzipEncoding    = "gzip"
-	deflateEncoding = "deflate"
+	BrEncoding      = "br"
+	GzipEncoding    = "gzip"
+	DeflateEncoding = "deflate"
 )
 
-type compressResponseWriter struct {
-	Writer io.WriteCloser
-	http.ResponseWriter
-	http.Hijacker
-	http.Flusher
-	encoding string
-	level    int
-	code     int
-}
-
-func (w *compressResponseWriter) WriteHeader(c int) {
-	w.ResponseWriter.Header().Del("Content-Length")
-	if w.code == 0 {
-		w.code = c
+func (cwr *CompressedResponseWriter) Write(b []byte) (int, error) {
+	if cwr.Writer != nil {
+		cwr.writeHeader()
+		return cwr.Writer.Write(b)
 	}
-}
-
-func (w *compressResponseWriter) Header() http.Header {
-	return w.ResponseWriter.Header()
-}
-
-func (w *compressResponseWriter) writeHeader() {
-	if w.code != 0 {
-		w.ResponseWriter.WriteHeader(w.code)
-		w.code = 0
+	println(cwr.ResponseWriter.Compressed)
+	if cwr.ResponseWriter.Compressed {
+		cwr.writeHeader()
+		return cwr.ResponseWriter.Write(b)
 	}
-}
 
-func (w *compressResponseWriter) Write(b []byte) (int, error) {
-	h := w.ResponseWriter.Header()
+	// If we have already decided not to use GZIP, immediately passthrough.
+	if cwr.ignore {
+		cwr.writeHeader()
+		return cwr.ResponseWriter.Write(b)
+	}
+
+	cwr.buf = append(cwr.buf, b...)
+	// Don't compress short pieces of data since it won't improve performance. Ignore compressed data too
+	if len(b) < 1400 {
+
+		return len(b), cwr.startPlain()
+	}
+	switch cwr.encoding {
+	case Br:
+		cwr.Header().Set(headers.ContentEncoding, "br")
+	case Gz:
+
+		cwr.Header().Set(headers.ContentEncoding, "gzip")
+	}
+	h := cwr.ResponseWriter.Header()
 	if h.Get("Content-Type") == "" {
 		h.Set("Content-Type", http.DetectContentType(b))
 	}
 	h.Del("Content-Length")
+	defer cwr.Writer.Close()
+	return cwr.Writer.Write(b)
+}
 
-	e := h.Get("Content-Encoding")
-	// Don't compress short pieces of data since it won't improve performance. Ignore compressed data too
-	if len(b) < 1400 || e == brEncoding || e == gzipEncoding || e == deflateEncoding {
-		w.writeHeader()
-		return w.ResponseWriter.Write(b)
+type CompressedResponseWriter struct {
+	Writer io.WriteCloser
+	*response.ResponseWriter
+	http.Hijacker
+	http.Flusher
+	buf      []byte
+	brIndex  int // index for BrWriterPools
+	gzIndex  int
+	ignore   bool // If true, then we immediately passthru writes to the underlying ResponseWriter.
+	code     int
+	encoding Encoding
+}
+
+// Reset - Reset the stored content of ResponseWriter.
+func (cwr *CompressedResponseWriter) Reset() {
+	cwr.code = 0
+	cwr.buf = make([]byte, 0)
+}
+
+func (cwr *CompressedResponseWriter) WriteHeader(c int) {
+	cwr.ResponseWriter.Header().Del("Content-Length")
+	if cwr.code == 0 {
+		cwr.code = c
+	}
+}
+func (cwr *CompressedResponseWriter) writeHeader() {
+	if cwr.code != 0 {
+		cwr.ResponseWriter.WriteHeader(cwr.code)
 	}
 
-	h.Set("Content-Encoding", w.encoding)
-	w.writeHeader()
+}
 
-	if w.encoding == brEncoding {
-		if w.level < brotli.BestSpeed || w.level > brotli.BestCompression {
-			w.level = brotli.DefaultCompression
-		}
-
-		w.Writer = brotli.NewWriterLevel(w, w.level)
-	} else {
-		if w.level < gzip.HuffmanOnly || w.level > gzip.BestCompression {
-			w.level = gzip.DefaultCompression
-		}
-
-		w.Writer, _ = gzip.NewWriterLevel(w, w.level)
-	}
-	defer w.Writer.Close()
-
-	return w.Writer.Write(b)
+func (cwr *CompressedResponseWriter) Header() http.Header {
+	return cwr.ResponseWriter.Header()
 }
 
 type flusher interface {
 	Flush() error
 }
 
-func (w *compressResponseWriter) Flush() {
+func (w *CompressedResponseWriter) Flush() {
 	// Flush compressed data if compressor supports it.
 	f, ok := w.Writer.(flusher)
 	if !ok {
@@ -95,61 +109,127 @@ func (w *compressResponseWriter) Flush() {
 	}
 }
 
-// CompressHandler gzip/brotli compresses HTTP responses for clients that support it
-// via the 'Accept-Encoding' header.
-//
-// Compressing TLS traffic may leak the page contents to an attacker if the
-// page contains user input: http://security.stackexchange.com/a/102015/12208
-func CompressHandler(h http.Handler) http.Handler {
-	return CompressHandlerLevel(h, 6)
+func NewCompressedResponseWriter(w http.ResponseWriter, r *http.Request) *CompressedResponseWriter {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		hijacker = nil
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		flusher = nil
+	}
+	gzIndex := poolIndex(gzip.DefaultCompression, Gz)
+	brIndex := poolIndex(brotli.DefaultCompression, Br)
+	wr := &CompressedResponseWriter{ResponseWriter: response.NewResponseWriter(w), Hijacker: hijacker, brIndex: brIndex, gzIndex: gzIndex, Flusher: flusher}
+
+	wr.Writer = wr.init(r)
+
+	wr.Reset()
+	return wr
 }
 
-// CompressHandlerLevel gzip/brotli compresses HTTP responses with specified compression level
-// for clients that support it via the 'Accept-Encoding' header.
-//
-// The compression level should be valid for encodings you use
-func CompressHandlerLevel(h http.Handler, level int) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// detect what encoding to use
-		var encoding string
-		for _, curEnc := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
-			curEnc = strings.TrimSpace(curEnc)
-			if curEnc == brEncoding || curEnc == gzipEncoding {
-				encoding = curEnc
-				if curEnc == brEncoding {
-					break
-				}
+func (cwr *CompressedResponseWriter) init(r *http.Request) io.WriteCloser {
+
+	// if cwr.Header().Get("Content-Type") == "" {
+
+	// 	return nopCloser{cwr.ResponseWriter.ResponseWriter}
+	// }
+
+	if cwr.Header().Get("Vary") == "" {
+		cwr.Header().Set(headers.Vary, headers.AcceptEncoding)
+	}
+	encoding := NegotiateContentEncoding(r, []string{"br", "gzip"})
+	if cwr.code != 0 {
+		cwr.writeHeader()
+		// Ensure that no other WriteHeader's happen
+		cwr.code = 0
+	}
+	switch encoding {
+	case "br":
+		cwr.encoding = Br
+		brw := brp[cwr.brIndex].Get().(*brotli.Writer)
+		brw.Reset(cwr.ResponseWriter)
+		return brw
+
+	case "gzip":
+		cwr.encoding = Gz
+		cwr.Header().Set(headers.ContentEncoding, "gzip")
+
+		gzw := gzp[cwr.gzIndex].Get().(*gzip.Writer)
+
+		gzw.Reset(cwr.ResponseWriter)
+		return gzw
+	}
+
+	return nopCloser{cwr.ResponseWriter}
+}
+
+// Close will close the gzip.Writer and will put it back in the gzipWriterPool.
+func (cwr *CompressedResponseWriter) Close() error {
+
+	if cwr.ignore {
+		return nil
+	}
+
+	if cwr.Writer == nil {
+		// compression not triggered yet, write out regular response.
+		err := cwr.startPlain()
+		// Returns the error if any at write.
+		if err != nil {
+			err = fmt.Errorf("gziphandler: write to regular responseWriter at close gets error: %q", err.Error())
+		}
+		return err
+	}
+
+	err := cwr.Writer.Close()
+	switch cwr.encoding {
+	case Br:
+		brp[cwr.brIndex].Put(cwr.Writer)
+	case Gz:
+		gzp[cwr.gzIndex].Put(cwr.Writer)
+	}
+
+	cwr.Writer = nil
+	return err
+}
+
+func (w *CompressedResponseWriter) startPlain() error {
+	w.writeHeader()
+	w.ignore = true
+	// If Write was never called then don't call Write on the underlying ResponseWriter.
+	if w.buf == nil {
+		return nil
+	}
+	n, err := w.ResponseWriter.Write(w.buf)
+	w.buf = nil
+	// This should never happen (per io.Writer docs), but if the write didn't
+	// accept the entire buffer but returned no specific error, we have no clue
+	// what's going on, so abort just to be safe.
+	if err == nil && n < len(w.buf) {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
+func newCompressHandler(level int) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(headers.Vary, headers.AcceptEncoding)
+			encoding := NegotiateContentEncoding(r, []string{"br", "gzip"})
+			switch encoding {
+			case "br":
+				cwr := NewCompressedResponseWriter(w, r)
+				defer cwr.Close()
+				h.ServeHTTP(cwr, r)
 			}
-		}
-
-		// if we weren't able to identify an encoding we're familiar with, pass on the
-		// request to the handler and return
-		if encoding == "" {
 			h.ServeHTTP(w, r)
-			return
-		}
 
-		r.Header.Del("Accept-Encoding")
-		w.Header().Add("Vary", "Accept-Encoding")
+		})
+	}
+}
 
-		hijacker, ok := w.(http.Hijacker)
-		if !ok {
-			hijacker = nil
-		}
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			flusher = nil
-		}
-
-		w = &compressResponseWriter{
-			ResponseWriter: w,
-			Hijacker:       hijacker,
-			Flusher:        flusher,
-			encoding:       encoding,
-			level:          level,
-		}
-
-		h.ServeHTTP(w, r)
-	})
+func CompressHandler(h http.Handler) http.Handler {
+	wrapper := newCompressHandler(brotli.DefaultCompression)
+	return wrapper(h)
 }

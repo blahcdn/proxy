@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"hash/fnv"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -47,8 +46,8 @@ func NewRedisAdapter(opt *redis.Options) *RedisAdapter {
 	ropt := redis.Options(*opt)
 	r := redis.NewClient(&ropt)
 	return &RedisAdapter{redisCache.New(&redisCache.Options{
-		Redis:      r,
-		LocalCache: redisCache.NewTinyLFU(1000, time.Minute),
+		Redis: r,
+		//		LocalCache: redisCache.NewTinyLFU(1000, time.Minute),
 	})}
 }
 
@@ -56,17 +55,13 @@ func (a *RedisAdapter) Get(key uint64) (obj *CacheObject, exists bool) {
 	ctx := context.TODO()
 
 	wanted := &CacheObject{}
-	if err := a.store.Get(ctx, KeyAsString(key), wanted); err == nil {
-		return wanted, true
+	err := a.store.Get(ctx, KeyAsString(key), wanted)
+
+	// expired or doesn't exist
+	if err != nil {
+		return nil, false
 	}
-	return
-}
-
-func GenerateKey(URL string) uint64 {
-	hash := fnv.New64a()
-	hash.Write([]byte(URL))
-
-	return hash.Sum64()
+	return wanted, true
 }
 
 func KeyAsString(key uint64) string {
@@ -78,7 +73,6 @@ func (c CacheObject) Cache(a *RedisAdapter, key uint64, level CacheLevel, expira
 	if err != nil {
 		panic(err)
 	}
-
 	err = a.store.Set(&redisCache.Item{
 		Key:   KeyAsString(key),
 		Value: c,

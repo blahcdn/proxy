@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blahcdn/proxy/response"
+	"github.com/blahcdn/proxy/compress"
 	"github.com/blahcdn/proxy/server/cache"
 	"github.com/labstack/echo/v4"
 	//...
@@ -26,11 +26,6 @@ const (
 	LAX
 	FULL
 )
-
-type RequestCall struct {
-	Response *response.ResponseWriter
-	Request  *http.Request
-}
 
 type Target struct {
 	URL     *url.URL
@@ -76,29 +71,22 @@ func AddHost(host string, isWebsocket bool, target string) (err error) {
 		}
 	}
 
-	proxy := &httputil.ReverseProxy{Director: director}
+	proxy := &httputil.ReverseProxy{Director: director, Transport: patchProxyTransport()}
+
 	hostProxy.targets[host] = &Target{handler: proxy, URL: remoteUrl}
 
 	return nil
 }
 
-// func checkExpired(host string) (err error) {
-// 	if target, ok := hostProxy.targets[host]; ok {
-// 		hostProxy.Lock()
-
-// 		defer hostProxy.Unlock()
-
-// 	}
-// 	return nil
-// }
-
 func (rc *RequestCall) ProxyHandler(store *cache.RedisAdapter) {
+	println("hey")
 	r := rc.Request
 	w := rc.Response
 
 	host := r.Host
+	encoding := compress.NegotiateContentEncoding(rc.Request, []string{"br", "gzip"})
+	key := rc.GenerateKey(encoding)
 
-	key := cache.GenerateKey(rc.Request.URL.String())
 	if target, ok := hostProxy.targets[host]; ok {
 
 		// Fix header
@@ -119,22 +107,28 @@ func (rc *RequestCall) ProxyHandler(store *cache.RedisAdapter) {
 		case r.Header.Get(echo.HeaderAccept) == "text/event-stream":
 		default:
 			host := r.Host
-			if r.Method != "GET" {
-				w.Header().Set(cacheHeader, cache.HeaderCacheMiss)
-			} else {
+			w.Header().Set(cacheHeader, cache.HeaderCacheMiss)
+
+			// only cache GET requests
+			if r.Method == "GET" {
 
 				e, exists := store.Get(key)
 				if exists {
+					println("i exist")
 					rc.serveFromCache(e)
 					return
 
 				}
 			}
+			println("i dont exist")
 
 			fn, ok := hostProxy.targets[host]
 			if ok {
-				fn.handler.ServeHTTP(w, r)
-				rc.CacheFull(store, key, cache.CacheLevel(cache.All), 5*time.Minute)
+
+				fn.handler.ServeHTTP(rc.Response, rc.Request)
+
+				go rc.CacheFull(store, encoding, cache.CacheLevel(cache.All), 5*time.Minute)
+
 				return
 			} else {
 				http.Error(w, "Direct access prohibited", http.StatusForbidden)
@@ -192,14 +186,9 @@ func proxyRaw(t *Target, inw http.ResponseWriter, inr *http.Request) http.Handle
 	})
 }
 
-func InitReqCall(res http.ResponseWriter, req *http.Request) RequestCall {
-	return RequestCall{
-		Response: response.NewResponseWriter(res),
-		Request:  req,
-	}
-}
+func (rc RequestCall) CacheFull(store *cache.RedisAdapter, enc string, level cache.CacheLevel, ttl time.Duration) {
 
-func (rc RequestCall) CacheFull(store *cache.RedisAdapter, key uint64, level cache.CacheLevel, ttl time.Duration) {
-	obj := ConvertRequestCallToCacheObj(rc)
+	obj, key := ConvertRequestCallToCacheObj(rc)
+
 	obj.Cache(store, key, level, ttl)
 }

@@ -6,6 +6,7 @@ import (
 
 	"net/http"
 
+	"github.com/blahcdn/proxy/compress"
 	"github.com/blahcdn/proxy/server/cache"
 	"github.com/blahcdn/proxy/server/handler"
 	"github.com/go-redis/redis/v8"
@@ -14,7 +15,7 @@ import (
 var port string
 
 func StartServer() {
-	flag.StringVar(&port, "p", ":5000", "port to bind to")
+	flag.StringVar(&port, "p", ":4000", "port to bind to")
 
 	store := cache.NewRedisAdapter(&redis.Options{
 		Network: "unix",
@@ -25,12 +26,16 @@ func StartServer() {
 	// })
 
 	flag.Parse()
-	handler.AddHost("localhost:5000", false, "192.168.219.102:3001")
 
-	log.Fatal(http.ListenAndServeTLS(port, "127.0.0.1+1.pem", "127.0.0.1+1-key.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler.AddHost("localhost:1337", false, "192.168.219.102:3001")
+
+	handler.AddHost("127.0.0.1:4000", false, "192.168.219.102:3001")
+	handler.AddHost("127.0.0.1:1337", false, "192.168.219.102:3000")
+	handler.AddHost("localhost:4000", false, "192.168.219.102:3001")
+
+	log.Fatal(http.ListenAndServe(port, compress.CompressHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		rc := handler.InitReqCall(w, r)
 		rc.ProxyHandler(store)
-	})))
-
+	}))))
 }
